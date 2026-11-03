@@ -8,7 +8,7 @@ on:
 
 jobs:
   checkin:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production
     env:
       PYTHONIOENCODING: utf-8
@@ -37,9 +37,9 @@ jobs:
         path: |
           ~/.cache/uv
           .venv
-        key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+        key: ${{ runner.os }}-ubuntu24.04-uv-${{ hashFiles('pyproject.toml', 'uv.lock') }}
         restore-keys: |
-          ${{ runner.os }}-uv-
+          ${{ runner.os }}-ubuntu24.04-uv-
 
     - name: 安装依赖
       if: steps.uv-cache.outputs.cache-hit != 'true'
@@ -60,9 +60,9 @@ jobs:
       id: playwright-cache
       with:
         path: ~/.cache/ms-playwright
-        key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+        key: ${{ runner.os }}-ubuntu24.04-playwright-${{ steps.playwright-version.outputs.version }}
         restore-keys: |
-          ${{ runner.os }}-playwright-
+          ${{ runner.os }}-ubuntu24.04-playwright-
 
     - name: 安装 Playwright 浏览器
       if: steps.playwright-cache.outputs.cache-hit != 'true'
