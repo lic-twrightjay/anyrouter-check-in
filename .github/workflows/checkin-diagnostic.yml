@@ -17,6 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # Both Repository and production Environment Secrets are accessible here.
     - name: 验证并注入账号 Secrets
       env:
         ALL_SECRETS: ${{ toJson(secrets) }}

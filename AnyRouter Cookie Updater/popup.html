@@ -117,7 +117,7 @@
     .btn-orange { background: #bc4c00; color: #fff; }
     .btn-orange:hover { background: #953d00; }
 
-    .status { margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 12px; display: none; }
+    .status { margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 12px; display: none; white-space: pre-wrap; overflow-wrap: anywhere; }
     .status.success { background: #dafbe1; color: #116329; border: 1px solid #aceebb; }
     .status.error { background: #ffebe9; color: #82071e; border: 1px solid #ffcecb; }
     .status.info { background: #ddf4ff; color: #0969da; border: 1px solid #b6e3ff; }
@@ -137,7 +137,7 @@
     <div class="form-group">
       <label for="githubToken">Personal Access Token (PAT)</label>
       <input type="password" id="githubToken" placeholder="ghp_xxxxxxxxxxxx">
-      <div class="hint">需要 repo 权限（或 Environment secrets 写入权限）</div>
+      <div class="hint">Classic PAT：repo scope；Fine-grained PAT：Environment 同步需 Environments → Read and write，仓库 Secrets 同步需 Secrets → Read and write（须选择当前仓库）。</div>
     </div>
     <div class="form-row" style="display:flex;gap:8px;">
       <div class="form-group" style="flex:1">
@@ -152,7 +152,7 @@
     <div class="form-group">
       <label for="environmentName">Environment 名称（可选）</label>
       <input type="text" id="environmentName" placeholder="production" value="production">
-      <div class="hint">留空则推送到 repository secrets</div>
+      <div class="hint">填写 production 则上传 Environment Secrets；留空则上传 Repository Secrets。签到工作流可以直接读取两者；不要把 PAT 填进账号 Secret。</div>
     </div>
   </div>
 

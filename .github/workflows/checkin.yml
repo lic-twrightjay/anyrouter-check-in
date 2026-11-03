@@ -22,6 +22,8 @@ jobs:
 
     - uses: actions/checkout@v4
 
+    # secrets context includes Repository Secrets and the production Environment.
+    # Environment values take precedence for duplicate names.
     - name: 验证并注入账号 Secrets
       env:
         ALL_SECRETS: ${{ toJson(secrets) }}

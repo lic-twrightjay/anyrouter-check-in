@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AnyRouter Cookie Updater",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "自动提取 AnyRouter 等平台的 session cookie，推送到 GitHub Actions Environment Secrets",
   "permissions": [
     "cookies",

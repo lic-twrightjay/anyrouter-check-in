@@ -64,7 +64,6 @@ async function getConfig() {
 }
 
 async function syncAllAccounts() {
-  _cachedRepoId = null;
   const config = await getConfig();
   if (!config.githubToken || !config.repoOwner || !config.repoName) {
     await Logger.error('GitHub configuration incomplete');
@@ -98,8 +97,10 @@ async function syncAllAccounts() {
 
   const okCount = results.filter(r => r.success).length;
   const summary = `${okCount}/${results.length} 账号同步成功 → ${secretTarget}`;
-  await Logger.info('Sync completed', { summary });
-  return { success: okCount === results.length, summary, results };
+  const firstFailure = results.find(r => !r.success);
+  const error = firstFailure ? `${firstFailure.label || '账号'}：${firstFailure.error || '同步失败'}` : null;
+  await Logger.info('Sync completed', { summary, firstError: error });
+  return { success: okCount === results.length, summary, error, results };
 }
 
 async function testOneAccount(account) {
@@ -929,64 +930,83 @@ async function syncOneAccount(config, account, options = {}) {
   }
 }
 
-// --- GitHub Secrets Encryption (libsodium crypto_box_seal) ---
+// --- GitHub Secrets API (documented owner/repo routes) ---
 
-let _cachedRepoId = null;
-async function getRepoId(config) {
-  if (_cachedRepoId) return _cachedRepoId;
-  const { githubToken, repoOwner, repoName } = config;
-  const resp = await fetch(`https://api.github.com/repos/${repoOwner}/${repoName}`, {
-    headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json' }
-  });
-  if (!resp.ok) throw new Error(`Failed to get repo: ${resp.status}`);
-  _cachedRepoId = (await resp.json()).id;
-  return _cachedRepoId;
+function githubSecretsBaseUrl(config) {
+  const owner = encodeURIComponent(config.repoOwner.trim());
+  const repo = encodeURIComponent(config.repoName.trim());
+  const root = `https://api.github.com/repos/${owner}/${repo}`;
+  const environment = (config.environmentName || '').trim();
+  return environment
+    ? `${root}/environments/${encodeURIComponent(environment)}/secrets`
+    : `${root}/actions/secrets`;
+}
+
+function githubSecretApiError(status, stage, config) {
+  const environment = (config.environmentName || '').trim();
+  const target = environment ? `Environment "${environment}"` : 'Repository Secrets';
+  const permission = environment ? 'Environments' : 'Secrets';
+  let reason;
+  if (status === 401) {
+    reason = 'PAT 无效、过期或已撤销。请在 GitHub 重新生成 PAT 并在插件中保存。';
+  } else if (status === 403) {
+    reason = `权限不足。Fine-grained PAT：Resource owner 选仓库所有者、Repository access 包含当前仓库、Repository permissions → ${permission} → Read and write；Classic PAT：勾选 repo scope。修改权限并保存 PAT 后重新同步。插件无法自动提升权限。`;
+  } else if (status === 404) {
+    reason = `目标不存在或无权访问。核对 Owner、仓库名称及 ${target} 是否存在；Fine-grained PAT 必须包含该仓库及 ${permission} 权限（GitHub 有时会对无权访问资源返回 404）。`;
+  } else if (status === 422) {
+    reason = 'GitHub 拒绝 Secret 名称或请求参数；请检查 env_key_suffix 是否仅包含字母、数字和下划线。';
+  } else if (status === 429 || status >= 500) {
+    reason = 'GitHub API 限流或暂时不可用，请稍后重试。';
+  } else {
+    reason = '请检查 PAT、仓库权限、同步目标以及 GitHub API 状态。';
+  }
+  // Do not echo raw API responses: they can include sensitive request details.
+  return new Error(`GitHub ${stage} 失败（HTTP ${status}，${target}）：${reason}`);
+}
+
+async function githubSecretRequest(config, url, stage, options = {}) {
+  let response;
+  try {
+    response = await fetch(url, {
+      method: options.method || 'GET',
+      headers: {
+        Authorization: `Bearer ${config.githubToken}`,
+        Accept: 'application/vnd.github+json',
+        ...(options.body ? { 'Content-Type': 'application/json' } : {})
+      },
+      ...(options.body ? { body: options.body } : {})
+    });
+  } catch {
+    throw new Error(`GitHub ${stage} 失败：无法连接 api.github.com，请检查网络或代理后重试。`);
+  }
+  if (!response.ok) throw githubSecretApiError(response.status, stage, config);
+  return response;
 }
 
 async function getPublicKey(config) {
-  const { githubToken, repoOwner, repoName, environmentName } = config;
-  let url;
-  if (environmentName) {
-    const repoId = await getRepoId(config);
-    url = `https://api.github.com/repositories/${repoId}/environments/${encodeURIComponent(environmentName)}/secrets/public-key`;
-  } else {
-    url = `https://api.github.com/repos/${repoOwner}/${repoName}/actions/secrets/public-key`;
+  const response = await githubSecretRequest(
+    config, `${githubSecretsBaseUrl(config)}/public-key`, '获取加密公钥'
+  );
+  const publicKey = await response.json();
+  if (!publicKey.key || !publicKey.key_id) {
+    throw new Error('GitHub 返回的 Secret 加密公钥格式不正确');
   }
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json' }
-  });
-  if (!resp.ok) throw new Error(`Failed to get public key: ${resp.status} ${await resp.text()}`);
-  return resp.json();
+  return publicKey;
 }
 
 async function pushToGitHubSecret(config, secretName, secretValue) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(secretName)) {
+    throw new Error('Secret 名称只能包含字母、数字和下划线，且不能以数字开头，请修改 env_key_suffix');
+  }
   await sodium.ready;
-
-  const { githubToken, repoOwner, repoName, environmentName } = config;
   const { key, key_id } = await getPublicKey(config);
-
   const publicKeyBytes = sodium.from_base64(key, sodium.base64_variants.ORIGINAL);
   const messageBytes = sodium.from_string(secretValue);
   const encryptedBytes = sodium.crypto_box_seal(messageBytes, publicKeyBytes);
   const encryptedValue = sodium.to_base64(encryptedBytes, sodium.base64_variants.ORIGINAL);
-
-  let url;
-  if (environmentName) {
-    const repoId = await getRepoId(config);
-    url = `https://api.github.com/repositories/${repoId}/environments/${encodeURIComponent(environmentName)}/secrets/${secretName}`;
-  } else {
-    url = `https://api.github.com/repos/${repoOwner}/${repoName}/actions/secrets/${secretName}`;
-  }
-
-  const resp = await fetch(url, {
+  const url = `${githubSecretsBaseUrl(config)}/${encodeURIComponent(secretName)}`;
+  await githubSecretRequest(config, url, '写入账号 Secret', {
     method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json'
-    },
     body: JSON.stringify({ encrypted_value: encryptedValue, key_id })
   });
-
-  if (!resp.ok) throw new Error(`GitHub API ${resp.status}: ${await resp.text()}`);
 }

@@ -489,7 +489,9 @@ function syncNow() {
     if (response && response.success) {
       showStatus(`✅ ${response.summary}`, 'success');
     } else {
-      showStatus(`❌ ${response ? response.error || response.summary : '未知错误'}`, 'error');
+      const summary = response?.summary ? `${response.summary}。\n` : '';
+      const reason = response?.error || '未知错误，请打开「日志」查看详细原因';
+      showStatus(`❌ ${summary}${reason}`, 'error');
     }
   });
 }
@@ -512,5 +514,9 @@ function showStatus(message, type) {
   el.textContent = message;
   el.className = `status ${type}`;
   el.style.display = 'block';
-  if (type !== 'info') setTimeout(() => { el.style.display = 'none'; }, 5000);
+  // Error explanations often contain permission-repair steps: keep them
+  // visible until the user takes another action instead of hiding in 5s.
+  if (type === 'success') setTimeout(() => {
+    if (el.textContent === message) el.style.display = 'none';
+  }, 12000);
 }

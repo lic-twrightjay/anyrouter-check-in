@@ -45,7 +45,7 @@ def prepare_accounts(secrets_map: dict, github_env: Path) -> tuple[int, int]:
 		raise ValueError(
 			'No accounts available: ANYROUTER_ACCOUNTS is empty and no '
 			'ANYROUTER_ACCOUNT_* Secrets are visible. Check the extension GitHub '
-			'repository and Environment (production), then use Sync All. '
+				'repository and Environment (production) or Repository Secrets, then use Sync All. '
 			'Test Account does not upload Secrets.'
 		)
 

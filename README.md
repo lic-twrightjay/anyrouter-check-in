@@ -68,9 +68,11 @@
 
 插件需要一个 GitHub Personal Access Token（PAT）：
 
-1. 访问 [GitHub Settings → Fine-grained tokens](https://github.com/settings/tokens?type=beta)
-2. 新建 token，选择你 fork 的仓库，开启 **Secrets** 的 Read & Write 权限
-3. 将 token 填入插件设置面板
+1. 访问 [GitHub Settings → Fine-grained tokens](https://github.com/settings/personal-access-tokens)
+2. 新建 token，**Resource owner** 选仓库所属用户，**Repository access** 选择你 fork 的仓库
+3. 若插件 Environment 填写了 `production`：在 **Repository permissions → Environments** 开启 **Read and write**；若 Environment 留空（Repository Secrets）：开启 **Secrets → Read and write**
+4. 如果使用 [Classic PAT](https://github.com/settings/tokens)，需勾选 `repo` scope。两类 PAT 任选其一，无法由插件自动扩大权限
+5. 将 token 填入插件设置面板
 
 ### 3️⃣ 在插件中添加账号
 
@@ -103,9 +105,61 @@
 > 插件中的 **「测试」只检查 Cookie / api_user，不会上传到 GitHub Secrets**。
 > 然后到仓库 **Settings → Environments → production → Environment secrets** 确认已经出现
 > `ANYROUTER_ACCOUNT_{api_user}_{PROVIDER}` 等独立 Secret（仅检查名称，勿公开值）。
-> 如果插件将 Secrets 写在 Repository Secrets 或另一个 Environment/仓库中，请将插件目标调整为
-> 当前工作流使用的 `production`，重新同步后再触发 Actions。
+> 若插件使用 **Repository Secrets**，独立账号 Secret 也可以被当前绑定 `production` 的签到工作流读取（同名 Environment Secret 优先）；无需改动工作流。
+> 如果插件同步到另一个仓库/Environment，需先修正同步目标并重新运行。
 > 工作流开始时会先预检可见账号数量；若为 0，会在安装浏览器前明确报错。
+
+### 🧯 同步返回 0/1、403 或 404 时
+
+插件中的绿色「测试成功」只说明浏览器能提取 Cookie / `api_user`，**并不代表已上传 GitHub**。请点击「立即同步」，检查错误文本（错误提示会保持显示），必要时打开插件「日志」：
+
+| API 返回 | 原因与解决方式 |
+| :--- | :--- |
+| 401 | PAT 无效、已撤销或过期，重新生成 PAT 并在插件保存 |
+| 403 | **Fine-grained PAT** 选择正确 Resource owner 和仓库，Environment 目标授予 **Environments: Read and write**；Repository Secrets 目标授予 **Secrets: Read and write**；**Classic PAT** 选择 **repo** scope |
+| 404 | 检查 Owner / Repo / Environment 是否准确（此仓库为 `lic-twrightjay/anyrouter-check-in`，Environment 名为 `production`）；GitHub 也可能用 404 表示权限不足 |
+| 422 | 检查 `env_key_suffix`：只使用英文字母、数字和下划线 |
+| 网络或限流 | 检查 GitHub API 网络、代理或稍后重试 |
+
+新版本插件使用 GitHub 官方 REST 路径 `/repos/{owner}/{repo}/environments/{environment_name}/secrets`；只要 PAT 权限足够，即可加密写入。插件**不能自动修复 PAT 授权**，也不会在 Environment 写入失败时擅自改写到 Repository Secrets。
+
+### 🧰 不依赖插件的手动恢复（两个任选其一）
+
+**方案 A：添加独立账号 Secret，保留 `ANYROUTER_ACCOUNTS=[]`**
+
+1. 从已登录站点的浏览器开发者工具 → **Application → Cookies** 中复制自己的 `session` 值；`api_user` 可在插件账号的测试结果中看到。Cookie 是登录凭据，只能在自己设备上复制，切勿发布到 Issue / 截图 / 聊天。
+2. 前往 [Environments](https://github.com/lic-twrightjay/anyrouter-check-in/settings/environments) → `production` → **Environment secrets → Add secret**；或前往 [Repository Secrets](https://github.com/lic-twrightjay/anyrouter-check-in/settings/secrets/actions) → **New repository secret**。两处均可被此工作流读取。
+3. Secret 名称按 `ANYROUTER_ACCOUNT_{api_user}_{PROVIDER}` 设置。例如 AgentRouter 用户 ID 为 `356997` 时：`ANYROUTER_ACCOUNT_356997_AGENTROUTER`。
+4. Secret Value 填入以下 JSON，**把示例占位符替换成你自己的 Cookie**，随后保存：
+
+   ```json
+   {
+     "cookies": { "session": "请替换为自己浏览器中的session值" },
+     "api_user": "356997",
+     "provider": "agentrouter",
+     "domain": "https://agentrouter.org"
+   }
+   ```
+
+   AnyRouter 账号则将 provider 改为 `anyrouter`、domain 改为 `https://anyrouter.top`，并替换对应 ID 与 Cookie。不同账号各建一个独立 Secret；**不要把 Secret Value 放进仓库文件**。
+5. 确保 `production` 中的 `ANYROUTER_ACCOUNTS` 仍为 `[]`。点击 [Actions → AnyRouter 自动签到](https://github.com/lic-twrightjay/anyrouter-check-in/actions/workflows/checkin.yml) → **Run workflow**，选择 `main`。检查「验证并注入账号 Secrets」输出 `0 base, 1 individual`（或实际账号数）后继续运行。
+
+**方案 B：直接使用 `ANYROUTER_ACCOUNTS` 基础 JSON**
+
+无需建立任何 `ANYROUTER_ACCOUNT_*`。进入 `production` → 编辑 `ANYROUTER_ACCOUNTS`，将值由 `[]` 改成 **JSON 数组**，例如：
+
+```json
+[
+  {
+    "cookies": { "session": "请替换为自己的session值" },
+    "api_user": "356997",
+    "provider": "agentrouter",
+    "domain": "https://agentrouter.org"
+  }
+]
+```
+
+重新运行工作流，预检应输出 `1 base, 0 individual`。此方案只需要一个 Environment Secret，适合暂时无法通过插件更新独立 Secrets 的情况。
 
 ### 5️⃣ 启用 GitHub Actions
 
@@ -299,10 +353,10 @@ ANYROUTER_ACCOUNT_760_COMPUTETOKEN
 
 | 配置项 | 说明 |
 | :--- | :--- |
-| 🔑 GitHub PAT | 需要 `Secrets` Read & Write 权限 |
+| 🔑 GitHub PAT | Fine-grained：Environment 目标需 `Environments` Read & Write，Repository Secrets 目标需 `Secrets` Read & Write；Classic：`repo` scope |
 | 👤 仓库 Owner | 你的 GitHub 用户名 |
 | 📦 仓库名称 | 如 `anyrouter-check-in` |
-| 🏷️ Environment | 如 `production`（留空则推送到 repo secrets） |
+| 🏷️ Environment | 如 `production`（留空则推送到 Repository Secrets，现有签到工作流也能读取） |
 | 📋 账号列表 | 每行一个站点，只需填 `domain` |
 | ⏰ 同步间隔 | 建议 360 分钟（6 小时），0 = 仅手动 |
 
@@ -602,7 +656,7 @@ uv run pytest tests/ --cov=.
 
 Use the **Chrome extension** or **Tampermonkey userscript** to auto-sync cookies.
 
-1. Create a [Fine-grained PAT](https://github.com/settings/tokens?type=beta) with **Secrets** Read & Write permission
+1. Create a [Fine-grained PAT](https://github.com/settings/personal-access-tokens) scoped to your repository. Use **Environments: Read and write** for the `production` Environment (or **Secrets: Read and write** when the Environment field is blank and the extension uploads Repository Secrets). A classic PAT instead requires `repo` scope.
 2. Enter the token in the extension settings
 
 ### 3️⃣ Add accounts in the extension
