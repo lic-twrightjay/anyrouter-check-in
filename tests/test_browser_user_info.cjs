@@ -90,7 +90,40 @@ test('JSON HTTP 401 returns status and error code without account response body'
 test('invalid JSON and network errors are distinguished without echoing them', async () => {
   const invalid = await callWith(mockResponse({ body: '{bad json' }));
   assert.equal(invalid._fetch_error_type, 'invalid_json');
+  assert.equal(invalid._http_status, 200);
   const network = await callWith(new Error('private credentials in network error'));
   assert.equal(network._fetch_error_type, 'network_error');
   assert.doesNotMatch(JSON.stringify(network), /private credentials/);
+});
+
+test('200 plain-text response is non-JSON, with no raw body returned', async () => {
+  const result = await callWith(mockResponse({
+    contentType: 'text/plain',
+    body: 'upstream returned secret value=private-session'
+  }));
+  assert.equal(result._fetch_error_type, 'invalid_json');
+  assert.equal(result._http_status, 200);
+  assert.doesNotMatch(JSON.stringify(result), /private-session|upstream returned/);
+});
+
+test('503 non-JSON response preserves status for bounded retry classification', async () => {
+  const result = await callWith(mockResponse({
+    status: 503, contentType: 'text/plain', body: 'temporary gateway failure'
+  }));
+  assert.equal(result._fetch_error_type, 'invalid_json');
+  assert.equal(result._http_status, 503);
+});
+
+test('timeout is distinguished from other network failures without leaking details', async () => {
+  const timeout = new Error('private timeout detail');
+  timeout.name = 'TimeoutError';
+  const result = await callWith(timeout);
+  assert.equal(result._fetch_error_type, 'request_timeout');
+  assert.doesNotMatch(JSON.stringify(result), /private timeout detail/);
+});
+
+test('JSON scalar is not accepted as an authenticated user response', async () => {
+  const result = await callWith(mockResponse({ body: '"success"' }));
+  assert.equal(result.success, false);
+  assert.equal(result._fetch_error_type, 'invalid_json');
 });

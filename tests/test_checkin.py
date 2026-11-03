@@ -52,6 +52,12 @@ async def test_main_handles_missing_provider_without_unpack_exception(monkeypatc
 	monkeypatch.setattr(checkin, 'save_balance_hash', lambda balance_hash: None)
 	monkeypatch.setattr(checkin.notify, 'push_message', lambda *args, **kwargs: None)
 
+	async def skip_retry_cooldown(_duration):
+		# This unit test validates the missing-provider branch, not real-time waiting.
+		return None
+
+	monkeypatch.setattr(checkin.asyncio, 'sleep', skip_retry_cooldown)
+
 	with pytest.raises(SystemExit) as exc_info:
 		await checkin.main()
 

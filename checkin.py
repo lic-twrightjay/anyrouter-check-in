@@ -454,6 +454,7 @@ NON_RETRYABLE_USER_INFO_ERRORS = {
 	'cloudflare_challenge',
 	'login_page',
 	'unexpected_html',
+	'invalid_json_permanent',
 	'http_access_denied',
 	'http_not_found',
 }
@@ -483,7 +484,11 @@ def _parse_browser_user_info(result: dict) -> dict:
 			'check site access and the configured user_info_path'
 		)
 	elif kind == 'invalid_json':
-		message = f'{http_label}: API response was not valid JSON'
+		if status is not None and type(status) is int and status >= 500:
+			message = f'{http_label}: API response was not valid JSON; upstream may be temporarily unavailable'
+		else:
+			kind = 'invalid_json_permanent'
+			message = f'{http_label}: API response was not valid JSON; check the API route and session'
 	elif kind == 'http_error':
 		if status in (401, 403):
 			kind = 'http_access_denied'

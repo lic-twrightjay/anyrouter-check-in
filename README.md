@@ -479,6 +479,9 @@ ANYROUTER_ACCOUNT_760_COMPUTETOKEN
 
 **注意：** `checkin.yml` 的 GitHub 托管运行器仍固定 `ubuntu-24.04`。Chromium 启动成功不代表网站已允许 GitHub 数据中心 IP 访问 API。仓库当前只保留手动 `workflow_dispatch`；如持续收到安全验证页面，请使用网站允许的执行环境（例如已获授权的自有服务器任务），或在浏览器中完成网站要求的验证。程序不会把无法核实的自动签到标记为成功，也不会自动绕过人工安全验证。新的 HTML 诊断不会打印页面源码、Cookie 或 Token。
 
+需要在 Linux 无桌面服务器上使用 Xvfb、uv、Chromium、环境变量和 cron 时，
+请参见 [自有服务器运行手册](docs/self-hosted-linux.md)。
+
 ---
 
 ## 🛠️ 本地开发
