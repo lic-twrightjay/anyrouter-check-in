@@ -111,8 +111,15 @@ jobs:
         BARK_SERVER: ${{ secrets.BARK_SERVER }}
       run: |
         # Xvfb needed for Playwright headless=False (WAF cookie fetch)
-        Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -ac &
+        # xkbcomp reports harmless XF86 keymap warnings on hosted runners.
+        # Keep the log available if Xvfb fails, without polluting check-in output.
+        Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -ac > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+        xvfb_pid=$!
         sleep 1
+        if ! kill -0 "$xvfb_pid" 2>/dev/null; then
+          cat "$RUNNER_TEMP/xvfb.log"
+          exit 1
+        fi
         DISPLAY=:99 uv run checkin.py
 
     - name: 执行结果

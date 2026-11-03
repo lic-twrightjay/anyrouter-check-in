@@ -11,6 +11,7 @@ import random
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -444,6 +445,63 @@ def _parse_user_info_json(data: dict) -> dict:
 	return {'success': False, 'error': 'API returned success=false'}
 
 
+# The API can return HTTP 200 with an HTML challenge/login page on GitHub
+# runners. Treat this as an access failure, not as a malformed user profile.
+PLAYWRIGHT_USER_INFO_SCRIPT = (Path(__file__).resolve().parent / 'utils' / 'browser_user_info.js').read_text(
+	encoding='utf-8'
+)
+NON_RETRYABLE_USER_INFO_ERRORS = {
+	'cloudflare_challenge',
+	'login_page',
+	'unexpected_html',
+	'http_access_denied',
+	'http_not_found',
+}
+
+
+def _parse_browser_user_info(result: dict) -> dict:
+	"""Classify browser responses with safe, actionable errors and no HTML/credential output."""
+	if not isinstance(result, dict):
+		return {'success': False, 'error_type': 'invalid_json', 'error': 'Browser returned an invalid API result'}
+	if result.get('success'):
+		return _parse_user_info_json(result)
+
+	kind = result.get('_fetch_error_type')
+	status = result.get('_http_status')
+	http_label = f'HTTP {status}' if type(status) is int and 100 <= status <= 599 else 'HTTP status unknown'
+	if kind == 'cloudflare_challenge':
+		message = (
+			f'{http_label}: Cloudflare verification HTML returned instead of user JSON. '
+			'The runner network may be restricted; verify site access in a normal browser '
+			'and use an authorized execution environment that can reach the API.'
+		)
+	elif kind == 'login_page':
+		message = f'{http_label}: Login page returned instead of user JSON; session may be expired'
+	elif kind == 'unexpected_html':
+		message = (
+			f'{http_label}: HTML returned instead of user JSON (login, WAF, or wrong API route); '
+			'check site access and the configured user_info_path'
+		)
+	elif kind == 'invalid_json':
+		message = f'{http_label}: API response was not valid JSON'
+	elif kind == 'http_error':
+		if status in (401, 403):
+			kind = 'http_access_denied'
+			message = f'{http_label}: User info request denied; check account authorization and site access'
+		elif status == 404:
+			kind = 'http_not_found'
+			message = f'{http_label}: User info API not found; check user_info_path'
+		else:
+			message = f'{http_label}: User info API request failed'
+	elif kind == 'request_timeout':
+		message = 'User info API request timed out'
+	elif kind == 'network_error':
+		message = 'User info API network request failed'
+	else:
+		message = 'User info API returned success=false'
+	return {'success': False, 'error_type': kind or 'api_error', 'error': message}
+
+
 async def _solve_turnstile_in_page(page, domain: str, timeout_ms: int = 45000) -> str | None:
 	"""在 Playwright 页面中渲染并解决 Turnstile 挑战，返回 token。
 
@@ -610,21 +668,17 @@ async def check_in_with_playwright(
 				for attempt in range(1, MAX_RETRIES + 1):
 					result = await safe_page_eval(
 						page,
-						"""async ([path, key, user, token]) => {
-							try {
-								const headers = {[key]: user};
-								if (token) headers['Authorization'] = token;
-								const r = await fetch(path, {headers, signal: AbortSignal.timeout(15000)});
-								if (!r.ok) return {success: false, error: 'HTTP ' + r.status};
-								return await r.json();
-							} catch(e) { return {success: false, error: e.message}; }
-						}""",
+						PLAYWRIGHT_USER_INFO_SCRIPT,
 						[provider_config.user_info_path, api_user_key, api_user, access_token],
 					)
-					parsed = _parse_user_info_json(result) if result.get('success') else result
+					parsed = _parse_browser_user_info(result)
 					if parsed.get('success'):
 						user_info_before = parsed
 						print(user_info_before['display'])
+						break
+					if parsed.get('error_type') in NON_RETRYABLE_USER_INFO_ERRORS:
+						user_info_before = parsed
+						print(f'[FAILED] {account_name}: {parsed["error"]}')
 						break
 					if attempt < MAX_RETRIES:
 						print(
@@ -634,6 +688,19 @@ async def check_in_with_playwright(
 					else:
 						user_info_before = parsed
 						print(parsed.get('error', 'Unknown error'))
+
+				# A verified access block affects manual and automatic check-in
+				# alike: do not submit more requests through the blocked page.
+				if user_info_before.get('error_type') in NON_RETRYABLE_USER_INFO_ERRORS:
+					await context.close()
+					return False, user_info_before, None
+
+				# Auto-check-in providers are triggered by this authenticated
+				# request. If it failed, another fetch cannot prove check-in.
+				if not provider_config.needs_manual_check_in() and not user_info_before.get('success'):
+					print(f'[FAILED] {account_name}: Auto check-in cannot be verified')
+					await context.close()
+					return False, user_info_before, None
 
 				# 执行签到
 				success = False
@@ -736,18 +803,10 @@ async def check_in_with_playwright(
 				# 获取签到后用户信息
 				result_after = await safe_page_eval(
 					page,
-					"""async ([path, key, user, token]) => {
-						try {
-							const headers = {[key]: user};
-							if (token) headers['Authorization'] = token;
-							const r = await fetch(path, {headers, signal: AbortSignal.timeout(15000)});
-							if (!r.ok) return {success: false, error: 'HTTP ' + r.status};
-							return await r.json();
-						} catch(e) { return {success: false, error: e.message}; }
-					}""",
+					PLAYWRIGHT_USER_INFO_SCRIPT,
 					[provider_config.user_info_path, api_user_key, api_user, access_token],
 				)
-				user_info_after = _parse_user_info_json(result_after) if result_after.get('success') else result_after
+				user_info_after = _parse_browser_user_info(result_after)
 
 				# 自动签到平台：before 失败但 after 成功也算签到成功
 				if not provider_config.needs_manual_check_in() and not success and user_info_after.get('success'):
@@ -1202,6 +1261,11 @@ async def main():
 						else 'Unknown error'
 					),
 				}
+			if not success:
+				for info in (user_info_after, user_info_before):
+					if isinstance(info, dict) and info.get('error_type') in NON_RETRYABLE_USER_INFO_ERRORS:
+						account_check_in_details[account_key]['error_type'] = info['error_type']
+						break
 
 		except Exception as e:
 			account_name = account.get_display_name(i)
@@ -1226,60 +1290,74 @@ async def main():
 	# 对首轮失败账号再试一次。仅当失败中确实出现 WAF 403 时才轮换出口 IP：
 	# 隧道类失败（goto 超时 / ERR_TUNNEL / ERR_EMPTY_RESPONSE）说明代理本身在抖动，
 	# 此时重启 WARP 只会雪上加霜，等隧道自愈（usque --always-reconnect）更可靠。
-	if failed_accounts:
-		print(f'[INFO] {len(failed_accounts)} accounts failed, starting one retry pass')
-		waf_suspected = any(
-			'403' in str(account_check_in_details.get(key, {}).get('error_message', ''))
-			for (_, _, key, _) in failed_accounts
-		)
-		if IP_ROTATE_CMD and waf_suspected:
-			await rotate_exit_ip()
-			settle = random.uniform(8, 16)
-			print(f'[INFO] Rotated exit IP before retry (WAF 403 seen), settling {settle:.0f}s')
-			await asyncio.sleep(settle)
+		if failed_accounts:
+			retryable_failed = [
+				item for item in failed_accounts
+				if account_check_in_details.get(item[2], {}).get('error_type') not in NON_RETRYABLE_USER_INFO_ERRORS
+			]
+			blocked_count = len(failed_accounts) - len(retryable_failed)
+			if blocked_count:
+				print(
+					f'[INFO] Skipping automatic retry for {blocked_count} account(s): '
+					'HTML challenge, login page or permanent API access error. '
+					'Check the site in an authorized browser/network.'
+				)
 		else:
-			cooldown = random.uniform(60, 120)
-			print(f'[INFO] Cooling down {cooldown:.0f}s before retry (letting proxy tunnel settle)')
-			await asyncio.sleep(cooldown)
-		for n, (i, account, account_key, stable_key) in enumerate(failed_accounts):
-			if n > 0:
-				await asyncio.sleep(random.uniform(6, 14))
-			try:
-				success, user_info_before, user_info_after = await check_in_account(account, i, app_config)
-			except Exception as e:
-				print(f'[FAILED] {account.get_display_name(i)} retry exception: {e}')
-				continue
-			if not success:
-				print(f'[WARN] {account.get_display_name(i)} retry still failed')
-				continue
-			success_count += 1
-			print(f'[INFO] {account.get_display_name(i)} succeeded on retry')
-			if user_info_after and user_info_after.get('success'):
-				current_balances[stable_key] = {
-					'quota': user_info_after['quota'],
-					'used': user_info_after['used_quota'],
-				}
-			detail = account_check_in_details.get(account_key, {'name': account.get_display_name(i)})
-			detail['success'] = True
-			detail['error_message'] = None
-			if user_info_before and user_info_before.get('success'):
-				detail['before_quota'] = user_info_before['quota']
-				detail['before_used'] = user_info_before['used_quota']
-			if user_info_after and user_info_after.get('success'):
-				detail['after_quota'] = user_info_after['quota']
-				detail['after_used'] = user_info_after['used_quota']
-			if (
-				user_info_before
-				and user_info_before.get('success')
-				and user_info_after
-				and user_info_after.get('success')
-			):
-				total_before = user_info_before['quota'] + user_info_before['used_quota']
-				total_after = user_info_after['quota'] + user_info_after['used_quota']
-				detail['check_in_reward'] = total_after - total_before
-				detail['usage_increase'] = user_info_after['used_quota'] - user_info_before['used_quota']
-				detail['balance_change'] = user_info_after['quota'] - user_info_before['quota']
-			account_check_in_details[account_key] = detail
+			retryable_failed = []
+		if retryable_failed:
+			print(f'[INFO] {len(retryable_failed)} accounts failed with retryable errors, starting one retry pass')
+			waf_suspected = any(
+				'403' in str(account_check_in_details.get(key, {}).get('error_message', ''))
+				for (_, _, key, _) in retryable_failed
+			)
+			if IP_ROTATE_CMD and waf_suspected:
+				await rotate_exit_ip()
+				settle = random.uniform(8, 16)
+				print(f'[INFO] Rotated exit IP before retry (WAF 403 seen), settling {settle:.0f}s')
+				await asyncio.sleep(settle)
+			else:
+				cooldown = random.uniform(60, 120)
+				print(f'[INFO] Cooling down {cooldown:.0f}s before retry (letting proxy tunnel settle)')
+				await asyncio.sleep(cooldown)
+			for n, (i, account, account_key, stable_key) in enumerate(retryable_failed):
+				if n > 0:
+					await asyncio.sleep(random.uniform(6, 14))
+				try:
+					success, user_info_before, user_info_after = await check_in_account(account, i, app_config)
+				except Exception as e:
+					print(f'[FAILED] {account.get_display_name(i)} retry exception: {e}')
+					continue
+				if not success:
+					print(f'[WARN] {account.get_display_name(i)} retry still failed')
+					continue
+				success_count += 1
+				print(f'[INFO] {account.get_display_name(i)} succeeded on retry')
+				if user_info_after and user_info_after.get('success'):
+					current_balances[stable_key] = {
+						'quota': user_info_after['quota'],
+						'used': user_info_after['used_quota'],
+					}
+				detail = account_check_in_details.get(account_key, {'name': account.get_display_name(i)})
+				detail['success'] = True
+				detail['error_message'] = None
+				if user_info_before and user_info_before.get('success'):
+					detail['before_quota'] = user_info_before['quota']
+					detail['before_used'] = user_info_before['used_quota']
+				if user_info_after and user_info_after.get('success'):
+					detail['after_quota'] = user_info_after['quota']
+					detail['after_used'] = user_info_after['used_quota']
+				if (
+					user_info_before
+					and user_info_before.get('success')
+					and user_info_after
+					and user_info_after.get('success')
+				):
+					total_before = user_info_before['quota'] + user_info_before['used_quota']
+					total_after = user_info_after['quota'] + user_info_after['used_quota']
+					detail['check_in_reward'] = total_after - total_before
+					detail['usage_increase'] = user_info_after['used_quota'] - user_info_before['used_quota']
+					detail['balance_change'] = user_info_after['quota'] - user_info_before['quota']
+				account_check_in_details[account_key] = detail
 
 	# 检查余额变化
 	current_balance_hash = generate_balance_hash(current_balances) if current_balances else None

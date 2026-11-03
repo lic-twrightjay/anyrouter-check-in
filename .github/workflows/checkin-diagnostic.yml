@@ -52,6 +52,11 @@ jobs:
         PROVIDERS: ${{ secrets.PROVIDERS }}
         GA_DIAG_ACCOUNT_TIMEOUT: ${{ github.event.inputs.account_timeout }}
       run: |
-        Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -ac &
+        Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -ac > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+        xvfb_pid=$!
         sleep 1
+        if ! kill -0 "$xvfb_pid" 2>/dev/null; then
+          cat "$RUNNER_TEMP/xvfb.log"
+          exit 1
+        fi
         DISPLAY=:99 uv run python -u scripts/diagnose_accounts.py --timeout "${GA_DIAG_ACCOUNT_TIMEOUT:-180}"

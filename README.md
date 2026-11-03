@@ -472,6 +472,12 @@ ANYROUTER_ACCOUNT_760_COMPUTETOKEN
 | 🍪 cookie 提取失败 | 确认已在浏览器中登录该站点 |
 | 🔍 api_user 解析失败 | 确认站点为 NewAPI / OneAPI 架构 |
 | 🆕 新平台全部 401 | `PROVIDERS` 未包含该平台，执行插件同步后重新触发 Actions |
+| `Unexpected token '<'` / `HTTP 200: HTML returned instead of user JSON` | 用户信息接口返回 HTML（Cloudflare 验证页、登录页或 API 路由错误）。新版脚本会区分响应类型，不再把 HTML 当作 JSON 解析 |
+| `Cloudflare verification HTML returned instead of user JSON` | GitHub 托管运行器出口网络可能被网站限制。先在已登录的普通浏览器确认站点可访问，再从有权使用且能访问该服务的运行环境执行；仅更换 Cookie 或重试不一定能解决 |
+| `Login page returned instead of user JSON` | 登录态可能失效，重新登录网站，使用插件同步账号 Secret 后运行 |
+| Xvfb / xkbcomp `Could not resolve keysym XF86...` | Ubuntu 键盘映射警告，与用户信息 API 返回 HTML 无关。工作流将其重定向，仅在 Xvfb 启动失败时显示 |
+
+**注意：** `checkin.yml` 的 GitHub 托管运行器仍固定 `ubuntu-24.04`。Chromium 启动成功不代表网站已允许 GitHub 数据中心 IP 访问 API。仓库当前只保留手动 `workflow_dispatch`；如持续收到安全验证页面，请使用网站允许的执行环境（例如已获授权的自有服务器任务），或在浏览器中完成网站要求的验证。程序不会把无法核实的自动签到标记为成功，也不会自动绕过人工安全验证。新的 HTML 诊断不会打印页面源码、Cookie 或 Token。
 
 ---
 
