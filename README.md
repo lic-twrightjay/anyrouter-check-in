@@ -96,6 +96,17 @@
 
 > 💡 如果所有账号都通过 `ANYROUTER_ACCOUNT_*` 独立管理（推荐），`ANYROUTER_ACCOUNTS` 可设为 `[]`。
 
+> ⚠️ **`[]` 表示不在基础列表中存储账号，不会自动创建任何账号。**
+> 请先在插件的 GitHub 配置中确认 **Owner 为 `lic-twrightjay`（如使用该 Fork）**、
+> **仓库名为 `anyrouter-check-in`、Environment 为 `production`**，
+> 点击 **保存 → 同步**，并确认同步结果显示 **全部账号成功**，目标仓库及 Environment 正确。
+> 插件中的 **「测试」只检查 Cookie / api_user，不会上传到 GitHub Secrets**。
+> 然后到仓库 **Settings → Environments → production → Environment secrets** 确认已经出现
+> `ANYROUTER_ACCOUNT_{api_user}_{PROVIDER}` 等独立 Secret（仅检查名称，勿公开值）。
+> 如果插件将 Secrets 写在 Repository Secrets 或另一个 Environment/仓库中，请将插件目标调整为
+> 当前工作流使用的 `production`，重新同步后再触发 Actions。
+> 工作流开始时会先预检可见账号数量；若为 0，会在安装浏览器前明确报错。
+
 ### 5️⃣ 启用 GitHub Actions
 
 在 **Actions** 选项卡启用 "AnyRouter 自动签到" workflow，点击 **Run workflow** 手动触发一次验证。

@@ -71,6 +71,9 @@ async function syncAllAccounts() {
     return { success: false, error: 'GitHub 配置不完整' };
   }
 
+  const secretTarget = `${config.repoOwner}/${config.repoName} / ${config.environmentName ? `Environment: ${config.environmentName}` : 'Repository Secrets'}`;
+  await Logger.info('GitHub Secrets sync target', { repository: `${config.repoOwner}/${config.repoName}`, environment: config.environmentName || '(repository)' });
+
   let accounts;
   try {
     accounts = typeof config.accounts === 'string' ? JSON.parse(config.accounts) : config.accounts;
@@ -94,9 +97,9 @@ async function syncAllAccounts() {
   await syncProvidersSecret(config, accounts);
 
   const okCount = results.filter(r => r.success).length;
-  const summary = `${okCount}/${results.length} 账号同步成功`;
+  const summary = `${okCount}/${results.length} 账号同步成功 → ${secretTarget}`;
   await Logger.info('Sync completed', { summary });
-  return { success: okCount > 0, summary, results };
+  return { success: okCount === results.length, summary, results };
 }
 
 async function testOneAccount(account) {

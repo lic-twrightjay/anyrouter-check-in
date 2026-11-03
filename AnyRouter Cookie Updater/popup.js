@@ -295,7 +295,7 @@ function formatTestResultMessage(response) {
     return parts.join(' · ');
   }
 
-  const parts = ['支持'];
+  const parts = ['本地测试通过（尚未同步到 GitHub）'];
   if (result.api_user) parts.push(`api_user=${result.api_user}`);
   if (result.provider) parts.push(`provider=${result.provider}`);
   return parts.join(' · ');

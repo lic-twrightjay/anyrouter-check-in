@@ -17,6 +17,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: 验证并注入账号 Secrets
+      env:
+        ALL_SECRETS: ${{ toJson(secrets) }}
+      run: python3 scripts/prepare_action_accounts.py
+
     - uses: astral-sh/setup-uv@v3
       with:
         version: latest
@@ -39,19 +44,6 @@ jobs:
 
     - name: 安装 Xvfb
       run: sudo apt-get install -y -qq xvfb
-
-    - name: 注入 ANYROUTER_ACCOUNT_* secrets
-      env:
-        ALL_SECRETS: ${{ toJson(secrets) }}
-      run: |
-        python3 - <<'PY'
-        import json, os
-        secrets = json.loads(os.environ['ALL_SECRETS'])
-        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f:
-            for k, v in secrets.items():
-                if k.startswith('ANYROUTER_ACCOUNT_'):
-                    f.write(f'{k}={v}\n')
-        PY
 
     - name: 执行隔离账号诊断（无通知）
       env:
